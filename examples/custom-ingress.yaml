@@ -1,0 +1,53 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: custom-ingress
+  namespace: default
+  annotations:
+    # 基本配置
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # APISIX 插件配置
+    k8s.apisix.apache.org/plugin-jwt-auth: "true"
+    k8s.apisix.apache.org/plugin-config-jwt-auth: |
+      {
+        "header": "Authorization",
+        "query": "token",
+        "cookie": "jwt"
+      }
+    
+    # 限流配置
+    k8s.apisix.apache.org/plugin-limit-count: "true"
+    k8s.apisix.apache.org/plugin-config-limit-count: |
+      {
+        "count": 10,
+        "time_window": 60,
+        "rejected_code": 503,
+        "key": "remote_addr"
+      }
+    
+    # IP 黑名单
+    k8s.apisix.apache.org/plugin-ip-restriction: "true"
+    k8s.apisix.apache.org/plugin-config-ip-restriction: |
+      {
+        "blacklist": ["10.2.3.4", "192.168.1.0/24"],
+        "message": "Access denied"
+      }
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: api.example.com
+    http:
+      paths:
+      - path: /api(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - api.example.com
+    secretName: api-tls 

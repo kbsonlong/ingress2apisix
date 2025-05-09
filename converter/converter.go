@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -72,6 +73,11 @@ const (
 	AnnotationCorsAllowOrigin = "nginx.ingress.kubernetes.io/cors-allow-origin"
 	// 启用限流注解
 	AnnotationEnableRateLimit = "nginx.ingress.kubernetes.io/limit-rps"
+
+	// APISIX 插件注解前缀
+	AnnotationPluginPrefix = "k8s.apisix.apache.org/plugin-"
+	// APISIX 插件配置注解前缀
+	AnnotationPluginConfigPrefix = "k8s.apisix.apache.org/plugin-config-"
 )
 
 // convertPath 将 Ingress 路径转换为 APISIX 路径
@@ -152,7 +158,7 @@ func convertAnnotations(annotations map[string]string, route *ApisixHTTPRoute) {
 		route.Plugins = append(route.Plugins, ApisixPlugin{
 			Name: "proxy-rewrite",
 			Config: map[string]interface{}{
-				"uri": rewriteTarget,
+				"regex_uri": []string{"/api/(.*)", rewriteTarget},
 			},
 			Enable: true,
 		})
@@ -170,28 +176,17 @@ func convertAnnotations(annotations map[string]string, route *ApisixHTTPRoute) {
 	}
 
 	// 处理 CORS
-	if enableCORS, ok := annotations[AnnotationEnableCORS]; ok && enableCORS == "true" {
-		corsConfig := map[string]interface{}{
-			"allow_origins":  "*",
-			"allow_methods":  "GET,POST,PUT,DELETE,OPTIONS",
-			"allow_headers":  "*",
-			"expose_headers": "*",
-			"max_age":        3600,
-		}
-
-		// 处理 CORS 允许方法
-		if methods, ok := annotations[AnnotationCorsAllowMethods]; ok {
-			corsConfig["allow_methods"] = methods
-		}
-
-		// 处理 CORS 允许源
-		if origins, ok := annotations[AnnotationCorsAllowOrigin]; ok {
-			corsConfig["allow_origins"] = origins
-		}
-
+	if corsEnabled, ok := annotations[AnnotationEnableCORS]; ok && corsEnabled == "true" {
 		route.Plugins = append(route.Plugins, ApisixPlugin{
-			Name:   "cors",
-			Config: corsConfig,
+			Name: "cors",
+			Config: map[string]interface{}{
+				"allow_origins":     "*",
+				"allow_methods":     "GET,POST,PUT,DELETE,OPTIONS",
+				"allow_headers":     "*",
+				"expose_headers":    "*",
+				"max_age":           5,
+				"allow_credentials": true,
+			},
 			Enable: true,
 		})
 	}
@@ -209,23 +204,41 @@ func convertAnnotations(annotations map[string]string, route *ApisixHTTPRoute) {
 		})
 	}
 
-	// 处理自定义注解
+	// 处理 APISIX 插件配置
 	for key, value := range annotations {
-		if strings.HasPrefix(key, "apisix.ingress.kubernetes.io/") {
-			pluginName := strings.TrimPrefix(key, "apisix.ingress.kubernetes.io/")
-			// 尝试解析 JSON 格式的插件配置
-			if strings.HasPrefix(value, "{") && strings.HasSuffix(value, "}") {
-				route.Plugins = append(route.Plugins, ApisixPlugin{
-					Name:   pluginName,
-					Config: map[string]interface{}{"value": value},
-					Enable: true,
-				})
-			} else {
-				route.Plugins = append(route.Plugins, ApisixPlugin{
-					Name:   pluginName,
-					Config: map[string]interface{}{"value": value},
-					Enable: true,
-				})
+		// 处理插件启用状态
+		if strings.HasPrefix(key, AnnotationPluginPrefix) {
+			pluginName := strings.TrimPrefix(key, AnnotationPluginPrefix)
+			if value == "true" {
+				// 检查是否有对应的配置
+				configKey := fmt.Sprintf("%s%s", AnnotationPluginConfigPrefix, pluginName)
+				if configValue, ok := annotations[configKey]; ok {
+					// 尝试解析 JSON 配置
+					var config map[string]interface{}
+					if err := json.Unmarshal([]byte(configValue), &config); err == nil {
+						route.Plugins = append(route.Plugins, ApisixPlugin{
+							Name:   pluginName,
+							Config: config,
+							Enable: true,
+						})
+					} else {
+						// 如果解析失败，使用原始值
+						route.Plugins = append(route.Plugins, ApisixPlugin{
+							Name: pluginName,
+							Config: map[string]interface{}{
+								"value": configValue,
+							},
+							Enable: true,
+						})
+					}
+				} else {
+					// 如果没有配置，使用默认值
+					route.Plugins = append(route.Plugins, ApisixPlugin{
+						Name:   pluginName,
+						Config: map[string]interface{}{},
+						Enable: true,
+					})
+				}
 			}
 		}
 	}
