@@ -1,0 +1,28 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+    creationTimestamp: null
+    name: web-ingress
+    namespace: default
+spec:
+    http:
+        - backends:
+            - serviceName: web-service
+              servicePort: 80
+          match:
+            hosts:
+                - www.example.com
+            paths:
+                - /
+          name: web-ingress-web-service
+          plugins:
+            - config:
+                http_to_https: true
+              enable: true
+              name: redirect
+            - config:
+                burst: 0
+                rate: "200"
+                rejected_code: 503
+              enable: true
+              name: limit-req
